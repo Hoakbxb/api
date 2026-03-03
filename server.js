@@ -60,9 +60,65 @@ app.use('/admin/cache', require('./routes/admin/cache'));
 app.use('/admin/admin_users', require('./routes/admin/adminUsers'));
 app.use('/upload', require('./routes/upload'));
 
-// ─── Health / Index ──────────────────────────────────────
+// ─── Health (default route) ───────────────────────────────
 
-app.get('/', async (_req, res) => {
+const healthEndpoints = {
+  health: '/health',
+  auth_login: '/auth/login',
+  get_user: '/get_user',
+  get_users: '/get_users',
+  create_account: '/create_account',
+  update_user: '/update_user',
+  transfer: '/transfer',
+  credit: '/credit',
+  debit: '/debit',
+  get_branches: '/get_branches',
+  get_countries: '/get_countries',
+  system_settings: '/system_settings',
+  admin_login: '/admin/auth/login',
+  admin_logout: '/admin/auth/logout',
+  admin_stats: '/admin/dashboard/stats',
+  admin_recent_transactions: '/admin/dashboard/recent_transactions',
+  admin_top_customers: '/admin/dashboard/top_customers',
+  admin_chart_data: '/admin/dashboard/chart_data',
+  admin_pending: '/admin/transactions/pending',
+  admin_approve: '/admin/transactions/approve',
+  admin_settings_get: '/admin/settings/get',
+  admin_settings_update: '/admin/settings/update',
+  admin_settings_email: '/admin/settings/email',
+  admin_settings_live_chat: '/admin/settings/live_chat',
+  admin_settings_site: '/admin/settings/site',
+  admin_pins_users: '/admin/pins/users_with_pins',
+  admin_pins_get: '/admin/pins/get',
+  admin_pins_update: '/admin/pins/update',
+  admin_users_transactions: '/admin/users/transactions',
+  admin_users_get_transaction: '/admin/users/get_transaction',
+  admin_users_update_transaction: '/admin/users/update_transaction',
+  admin_users_delete_transaction: '/admin/users/delete_transaction',
+  admin_users_delete: '/admin/users/delete',
+  admin_loans_list: '/admin/loans/list',
+  admin_loans_get: '/admin/loans/get',
+  admin_loans_approve: '/admin/loans/approve',
+  admin_loans_reject: '/admin/loans/reject',
+  admin_loans_disburse: '/admin/loans/disburse',
+  admin_loans_products: '/admin/loans/products',
+  admin_loans_stats: '/admin/loans/stats',
+  admin_credit_cards_list: '/admin/credit_cards/list',
+  admin_credit_cards_get: '/admin/credit_cards/get',
+  admin_credit_cards_update_status: '/admin/credit_cards/update_status',
+  admin_credit_cards_issue: '/admin/credit_cards/issue',
+  admin_credit_cards_products: '/admin/credit_cards/products',
+  admin_credit_cards_stats: '/admin/credit_cards/stats',
+  admin_backup_create: '/admin/backup/backup',
+  admin_backup_list: '/admin/backup/list',
+  admin_backup_delete: '/admin/backup/delete',
+  admin_cache_clear: '/admin/cache/clear',
+  upload_avatar: '/upload/avatar',
+  loans_apply: '/loans/apply',
+  credit_cards_apply: '/credit_cards/apply',
+};
+
+async function healthHandler(_req, res) {
   let ok = false;
   let hint = '';
   try {
@@ -76,69 +132,17 @@ app.get('/', async (_req, res) => {
   } catch (e) {
     hint = e.message;
   }
-
   res.json({
     status: ok ? 'success' : 'error',
     message: ok ? 'API (MongoDB/Node.js) is running' : 'MongoDB connection failed' + (hint ? ': ' + hint : ''),
     timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
     database: 'mongodb',
-    endpoints: {
-      health: '/',
-      auth_login: '/auth/login',
-      get_user: '/get_user',
-      get_users: '/get_users',
-      create_account: '/create_account',
-      update_user: '/update_user',
-      transfer: '/transfer',
-      credit: '/credit',
-      debit: '/debit',
-      get_branches: '/get_branches',
-      get_countries: '/get_countries',
-      system_settings: '/system_settings',
-      admin_login: '/admin/auth/login',
-      admin_logout: '/admin/auth/logout',
-      admin_stats: '/admin/dashboard/stats',
-      admin_recent_transactions: '/admin/dashboard/recent_transactions',
-      admin_top_customers: '/admin/dashboard/top_customers',
-      admin_chart_data: '/admin/dashboard/chart_data',
-      admin_pending: '/admin/transactions/pending',
-      admin_approve: '/admin/transactions/approve',
-      admin_settings_get: '/admin/settings/get',
-      admin_settings_update: '/admin/settings/update',
-      admin_settings_email: '/admin/settings/email',
-      admin_settings_live_chat: '/admin/settings/live_chat',
-      admin_settings_site: '/admin/settings/site',
-      admin_pins_users: '/admin/pins/users_with_pins',
-      admin_pins_get: '/admin/pins/get',
-      admin_pins_update: '/admin/pins/update',
-      admin_users_transactions: '/admin/users/transactions',
-      admin_users_get_transaction: '/admin/users/get_transaction',
-      admin_users_update_transaction: '/admin/users/update_transaction',
-      admin_users_delete_transaction: '/admin/users/delete_transaction',
-      admin_users_delete: '/admin/users/delete',
-      admin_loans_list: '/admin/loans/list',
-      admin_loans_get: '/admin/loans/get',
-      admin_loans_approve: '/admin/loans/approve',
-      admin_loans_reject: '/admin/loans/reject',
-      admin_loans_disburse: '/admin/loans/disburse',
-      admin_loans_products: '/admin/loans/products',
-      admin_loans_stats: '/admin/loans/stats',
-      admin_credit_cards_list: '/admin/credit_cards/list',
-      admin_credit_cards_get: '/admin/credit_cards/get',
-      admin_credit_cards_update_status: '/admin/credit_cards/update_status',
-      admin_credit_cards_issue: '/admin/credit_cards/issue',
-      admin_credit_cards_products: '/admin/credit_cards/products',
-      admin_credit_cards_stats: '/admin/credit_cards/stats',
-      admin_backup_create: '/admin/backup/backup',
-      admin_backup_list: '/admin/backup/list',
-      admin_backup_delete: '/admin/backup/delete',
-      admin_cache_clear: '/admin/cache/clear',
-      upload_avatar: '/upload/avatar',
-      loans_apply: '/loans/apply',
-      credit_cards_apply: '/credit_cards/apply',
-    },
+    endpoints: healthEndpoints,
   });
-});
+}
+
+app.get('/health', healthHandler);
+app.get('/', (req, res) => res.redirect('/health'));
 
 // ─── 404 ─────────────────────────────────────────────────
 
