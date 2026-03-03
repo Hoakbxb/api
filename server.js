@@ -7,19 +7,24 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 const path = require('path');
+const fs = require('fs');
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ─── Static uploads (profile images) ────────────────────
-const uploadsDir = path.join(__dirname, '..', 'api', 'uploads');
-app.use('/uploads', express.static(uploadsDir, { maxAge: '1y' }));
+// On Vercel, express.static is ignored; use R2/upload route for production.
+const uploadsDir = path.join(__dirname, 'uploads');
+if (fs.existsSync(uploadsDir)) {
+  app.use('/uploads', express.static(uploadsDir, { maxAge: '1y' }));
+}
 app.get('/get_image', (req, res) => {
   const file = req.query.file || '';
   const filename = path.basename(file.replace(/^uploads\//, ''));
   if (!filename) return res.status(400).send('File parameter required');
   const filePath = path.join(uploadsDir, filename);
+  if (!fs.existsSync(filePath)) return res.status(404).send('Image not found');
   res.sendFile(filePath, err => { if (err) res.status(404).send('Image not found'); });
 });
 
@@ -148,9 +153,13 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ status: 'error', message: 'Internal server error', data: null });
 });
 
-// ─── Start ───────────────────────────────────────────────
+// ─── Start (skip on Vercel; app is exported for serverless) ────────
 
-app.listen(PORT, () => {
-  console.log(`Bank 2026 API (MongoDB/Node.js) running on http://localhost:${PORT}`);
-  console.log('Press Ctrl+C to stop.');
-});
+module.exports = app;
+
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Bank 2026 API (MongoDB/Node.js) running on http://localhost:${PORT}`);
+    console.log('Press Ctrl+C to stop.');
+  });
+}
