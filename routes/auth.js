@@ -17,7 +17,35 @@ router.post('/login', async (req, res) => {
 
     const user = await users.findOne(
       { acno: acno.trim(), status: 'active' },
-      { projection: { id: 1, fname: 1, acno: 1, pass: 1, address: 1, phone: 1, email: 1, city: 1, state: 1, country: 1, image: 1, date: 1, typ: 1, cur: 1, total: 1, pin: 1, count: 1, status: 1, gender: 1, branch: 1, dob: 1, marital: 1, bname: 1, badd: 1 } }
+      {
+        projection: {
+          id: 1,
+          fname: 1,
+          acno: 1,
+          vendor_id: 1,
+          pass: 1,
+          address: 1,
+          phone: 1,
+          email: 1,
+          city: 1,
+          state: 1,
+          country: 1,
+          image: 1,
+          date: 1,
+          typ: 1,
+          cur: 1,
+          total: 1,
+          pin: 1,
+          count: 1,
+          status: 1,
+          gender: 1,
+          branch: 1,
+          dob: 1,
+          marital: 1,
+          bname: 1,
+          badd: 1,
+        },
+      }
     );
     if (!user) {
       return res.status(401).json({ status: 'error', message: 'Invalid account number or password', data: null });
