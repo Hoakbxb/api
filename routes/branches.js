@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { getCollection, getNextSequence, mongoDocToArray } = require('../config/db');
 const { attachAdmin, requireAdmin } = require('../middleware/adminAuth');
+const { getVendorIdFromReq } = require('../middleware/vendorContext');
 
 const router = Router();
 
@@ -10,7 +11,10 @@ router.get('/get_branches', attachAdmin, async (req, res) => {
     const branch = await getCollection('branch');
     if (!branch) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
 
-    const vendorId = req.adminVendorId;
+    const vendorId = req.adminVendorId || getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+    }
     const filter = vendorId ? { vendor_id: vendorId } : {};
 
     const cursor = branch.find(filter, { projection: { id: 1, bname: 1 } }).sort({ bname: 1 });

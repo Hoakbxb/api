@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const { getCollection, getNextSequence, mongoDocToArray } = require('../config/db');
+const { getVendorIdFromReq } = require('../middleware/vendorContext');
 
 const router = Router();
 
@@ -30,10 +31,13 @@ router.get('/list', async (req, res) => {
   try {
     const acno = (req.query.acno || '').trim();
     const userId = parseInt(req.query.user_id, 10) || 0;
-    const vendorId = (req.query.vendor_id || '').trim() || null;
+    const vendorId = getVendorIdFromReq(req);
 
     if (!acno && userId <= 0) {
       return res.status(400).json({ status: 'error', message: 'acno or user_id is required', data: [] });
+    }
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: [] });
     }
 
     const creditCards = await getCollection('credit_cards');
@@ -48,10 +52,13 @@ router.get('/list', async (req, res) => {
     if (!user) {
       return res.status(404).json({ status: 'error', message: 'User not found', data: [] });
     }
+    if (user.vendor_id != null && String(user.vendor_id).trim() !== '' && String(user.vendor_id).trim() !== String(vendorId).trim()) {
+      return res.status(404).json({ status: 'error', message: 'User not found', data: [] });
+    }
 
     const uid = user.id;
     const match = { user_id: uid };
-    if (vendorId) match.vendor_id = vendorId;
+    match.vendor_id = String(vendorId).trim();
 
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const cursor = creditCards.find(match).sort({ created_at: -1, id: -1 }).limit(limit);
@@ -89,6 +96,10 @@ router.post('/apply', async (req, res) => {
     if (userId <= 0 || !userAcno) {
       return res.status(401).json({ status: 'error', message: 'Authentication required (user_id and user_acno)', data: null });
     }
+    const vendorId = getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+    }
 
     const cardProductId = parseInt(input.card_product_id) || 0;
     if (cardProductId <= 0) {
@@ -104,6 +115,10 @@ router.post('/apply', async (req, res) => {
 
     const user = await users.findOne({ acno: userAcno });
     if (!user) return res.status(400).json({ status: 'error', message: 'User not found', data: null });
+    const userVendorId = user.vendor_id != null && String(user.vendor_id).trim() !== '' ? String(user.vendor_id).trim() : null;
+    if (userVendorId && userVendorId !== String(vendorId).trim()) {
+      return res.status(403).json({ status: 'error', message: 'You can only apply for credit cards within your organization', data: null });
+    }
 
     const product = await products.findOne({ id: cardProductId });
     if (!product) return res.status(400).json({ status: 'error', message: 'Card product not found', data: null });
@@ -124,8 +139,8 @@ router.post('/apply', async (req, res) => {
       pin_attempts: 0, last_used: null,
       created_at: new Date(), updated_at: new Date(),
     };
-    if (user.vendor_id != null && String(user.vendor_id).trim() !== '') cardDoc.vendor_id = String(user.vendor_id).trim();
-    else if (input.vendor_id != null && String(input.vendor_id).trim() !== '') cardDoc.vendor_id = String(input.vendor_id).trim();
+    if (userVendorId) cardDoc.vendor_id = userVendorId;
+    else cardDoc.vendor_id = String(vendorId).trim();
     await creditCards.insertOne(cardDoc);
 
     res.status(201).json({

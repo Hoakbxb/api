@@ -2,6 +2,7 @@ const { Router } = require('express');
 const { getCollection, getNextSequence, mongoDocToArray } = require('../config/db');
 const { sendAccountCreatedEmail, sendPasswordChangedEmail } = require('../config/mailer');
 const { getAdminFromToken } = require('../middleware/adminAuth');
+const { getVendorIdFromReq } = require('../middleware/vendorContext');
 
 const router = Router();
 
@@ -38,9 +39,12 @@ router.get('/get_user', async (req, res) => {
 
     const filter = userId > 0 ? { id: userId } : { acno };
     const admin = await getAdminFromToken(req);
-    if (admin) {
-      filter.vendor_id = admin.vendor_id ?? admin.username;
+    const vendorId = admin ? (admin.vendor_id ?? admin.username) : getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
     }
+    filter.vendor_id = String(vendorId).trim();
+
     const user = await users.findOne(filter);
     if (!user) return res.status(404).json({ status: 'error', message: 'User not found', data: null });
 
@@ -102,9 +106,11 @@ router.get('/get_users', async (req, res) => {
 
     // When admin is logged in (Bearer token), only return users for that admin's vendor.
     const admin = await getAdminFromToken(req);
-    if (admin) {
-      filter.vendor_id = admin.vendor_id ?? admin.username;
+    const vendorId = admin ? (admin.vendor_id ?? admin.username) : getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: [] });
     }
+    filter.vendor_id = String(vendorId).trim();
 
     const totalItems = await users.countDocuments(filter);
     const totalPages = Math.ceil(totalItems / limit);
@@ -166,7 +172,18 @@ router.post('/create_account', async (req, res) => {
     }
 
     const admin = await getAdminFromToken(req);
-    const vendorId = admin ? (admin.vendor_id ?? admin.username) : (input.vendor_id !== undefined && input.vendor_id !== null ? input.vendor_id : null);
+    const inputVendorId =
+      input.vendor_id !== undefined && input.vendor_id !== null && String(input.vendor_id).trim() !== ''
+        ? String(input.vendor_id).trim()
+        : null;
+    const vendorId = admin ? String(admin.vendor_id ?? admin.username) : inputVendorId;
+    if (!vendorId || String(vendorId).trim() === '') {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Unauthorized: vendor context required to create account',
+        data: null,
+      });
+    }
 
     const userId = await getNextSequence('users');
     const doc = {
@@ -194,7 +211,7 @@ router.post('/create_account', async (req, res) => {
       marital: (input.marital || '').trim(),
       bname: (input.bname || '').trim(),
       badd: (input.badd || '').trim(),
-      vendor_id: vendorId,
+      vendor_id: String(vendorId).trim(),
     };
 
     await users.insertOne(doc);
@@ -246,9 +263,17 @@ router.all('/update_user', async (req, res) => {
       if (current.vendor_id != null && String(current.vendor_id) !== String(adminVendorId)) {
         return res.status(403).json({ status: 'error', message: 'You can only update users belonging to your organization', data: null });
       }
+    } else {
+      const vendorId = getVendorIdFromReq(req);
+      if (!vendorId) {
+        return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+      }
+      if (current.vendor_id != null && String(current.vendor_id) !== String(vendorId).trim()) {
+        return res.status(403).json({ status: 'error', message: 'You can only update users belonging to your organization', data: null });
+      }
     }
 
-    const allowed = ['fname', 'address', 'phone', 'email', 'city', 'state', 'country', 'image', 'date', 'typ', 'cur', 'total', 'count', 'status', 'gender', 'branch', 'dob', 'marital', 'bname', 'badd', 'pass', 'vendor_id'];
+    const allowed = ['fname', 'address', 'phone', 'email', 'city', 'state', 'country', 'image', 'date', 'typ', 'cur', 'total', 'count', 'status', 'gender', 'branch', 'dob', 'marital', 'bname', 'badd', 'pass'];
     const $set = {};
     for (const f of allowed) {
       if (f in input) $set[f] = input[f];

@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { getCollection, getNextSequence, mongoDocToArray } = require('../config/db');
 const { sendLoanStatusEmail } = require('../config/mailer');
+const { getVendorIdFromReq } = require('../middleware/vendorContext');
 
 const router = Router();
 
@@ -26,10 +27,13 @@ router.get('/list', async (req, res) => {
   try {
     const acno = (req.query.acno || '').trim();
     const userId = parseInt(req.query.user_id, 10) || 0;
-    const vendorId = (req.query.vendor_id || '').trim() || null;
+    const vendorId = getVendorIdFromReq(req);
 
     if (!acno && userId <= 0) {
       return res.status(400).json({ status: 'error', message: 'acno or user_id is required', data: [] });
+    }
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: [] });
     }
 
     const loans = await getCollection('loans');
@@ -44,10 +48,13 @@ router.get('/list', async (req, res) => {
     if (!user) {
       return res.status(404).json({ status: 'error', message: 'User not found', data: [] });
     }
+    if (user.vendor_id != null && String(user.vendor_id).trim() !== '' && String(user.vendor_id).trim() !== String(vendorId).trim()) {
+      return res.status(404).json({ status: 'error', message: 'User not found', data: [] });
+    }
 
     const uid = user.id;
     const match = { user_id: uid };
-    if (vendorId) match.vendor_id = vendorId;
+    match.vendor_id = String(vendorId).trim();
 
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const cursor = loans.find(match).sort({ created_at: -1, id: -1 }).limit(limit);
@@ -84,6 +91,10 @@ router.post('/apply', async (req, res) => {
     if (userId <= 0 || !userAcno) {
       return res.status(401).json({ status: 'error', message: 'Authentication required (user_id and user_acno)', data: null });
     }
+    const vendorId = getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+    }
 
     const loanProductId = parseInt(input.loan_product_id) || 0;
     const principalAmount = parseFloat(input.principal_amount) || 0;
@@ -111,6 +122,9 @@ router.post('/apply', async (req, res) => {
 
     const user = await users.findOne({ acno: userAcno }) || await users.findOne({ id: userId }) || await users.findOne({ id: String(userId) });
     const loanVendorId = (user && user.vendor_id != null && String(user.vendor_id).trim() !== '') ? String(user.vendor_id).trim() : null;
+    if (loanVendorId && loanVendorId !== String(vendorId).trim()) {
+      return res.status(403).json({ status: 'error', message: 'You can only apply for loans within your organization', data: null });
+    }
 
     const newLoan = {
       id: loanId, user_id: userId, loan_product_id: loanProductId,

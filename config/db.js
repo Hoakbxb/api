@@ -31,9 +31,13 @@ async function getClient() {
   }
 
   try {
-    client = new MongoClient(uri, {
+    const options = {
       serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
-    });
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000,
+      tls: true,
+    };
+    client = new MongoClient(uri, options);
     await client.connect();
     return client;
   } catch (err) {

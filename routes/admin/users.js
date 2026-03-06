@@ -284,4 +284,115 @@ router.post('/delete', async (req, res) => {
   }
 });
 
+// POST /claim_unscoped — claim a legacy/unscoped user (vendor_id null/empty/missing) into this admin's vendor.
+// This fixes older records created when vendor headers/body were missing.
+router.post('/claim_unscoped', async (req, res) => {
+  try {
+    const vendorId = req.adminVendorId;
+    if (!vendorId) return res.status(401).json({ status: 'error', message: 'Unauthorized', data: null });
+
+    const input = req.body || {};
+    const acno = (input.acno || '').trim();
+    const userIdRaw = input.id ?? input.user_id ?? null;
+    const userIdNum = userIdRaw != null ? parseInt(userIdRaw, 10) : 0;
+
+    if (!acno && !(userIdNum > 0)) {
+      return res.status(400).json({ status: 'error', message: 'acno or id is required', data: null });
+    }
+
+    const users = await getCollection('users');
+    const acn = await getCollection('acn');
+    const pins = await getCollection('pins');
+    const loans = await getCollection('loans');
+    const creditCards = await getCollection('credit_cards');
+    if (!users) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
+
+    const unscopedVendorFilter = {
+      $or: [
+        { vendor_id: null },
+        { vendor_id: '' },
+        { vendor_id: { $exists: false } },
+      ],
+    };
+
+    const user = acno
+      ? await users.findOne({ acno, ...unscopedVendorFilter })
+      : await users.findOne({ id: userIdNum, ...unscopedVendorFilter });
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Unscoped user not found (already claimed or does not exist)',
+        data: null,
+      });
+    }
+
+    const targetAcno = String(user.acno || '').trim();
+    const targetUserId = user.id != null ? parseInt(user.id, 10) : null;
+    if (!targetAcno) {
+      return res.status(400).json({ status: 'error', message: 'User has no account number (acno)', data: null });
+    }
+
+    const claimedVendorId = String(vendorId).trim();
+    const result = {
+      users: null,
+      transactions: null,
+      pins: null,
+      loans: null,
+      credit_cards: null,
+    };
+
+    result.users = await users.updateMany(
+      { acno: targetAcno, ...unscopedVendorFilter },
+      { $set: { vendor_id: claimedVendorId } }
+    );
+
+    const relatedUnscopedFilter = { ...unscopedVendorFilter };
+
+    if (acn) {
+      result.transactions = await acn.updateMany(
+        { acno: targetAcno, ...relatedUnscopedFilter },
+        { $set: { vendor_id: claimedVendorId } }
+      );
+    }
+    if (pins) {
+      result.pins = await pins.updateMany(
+        { acno: targetAcno, ...relatedUnscopedFilter },
+        { $set: { vendor_id: claimedVendorId } }
+      );
+    }
+    if (targetUserId != null && loans) {
+      result.loans = await loans.updateMany(
+        { user_id: targetUserId, ...relatedUnscopedFilter },
+        { $set: { vendor_id: claimedVendorId } }
+      );
+    }
+    if (targetUserId != null && creditCards) {
+      result.credit_cards = await creditCards.updateMany(
+        { user_id: targetUserId, ...relatedUnscopedFilter },
+        { $set: { vendor_id: claimedVendorId } }
+      );
+    }
+
+    res.json({
+      status: 'success',
+      message: 'User claimed into vendor successfully',
+      data: {
+        acno: targetAcno,
+        user_id: targetUserId,
+        vendor_id: claimedVendorId,
+        modified: {
+          users: result.users?.modifiedCount ?? 0,
+          transactions: result.transactions?.modifiedCount ?? 0,
+          pins: result.pins?.modifiedCount ?? 0,
+          loans: result.loans?.modifiedCount ?? 0,
+          credit_cards: result.credit_cards?.modifiedCount ?? 0,
+        },
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message, data: null });
+  }
+});
+
 module.exports = router;
