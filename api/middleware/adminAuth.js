@@ -8,9 +8,11 @@ async function getAdminFromToken(req) {
   try {
     const authHeader = req.get('Authorization') || req.headers.authorization || '';
     const bearer = (authHeader && authHeader.startsWith('Bearer ')) ? authHeader.slice(7).trim() : null;
+    const queryToken = req.query?.session_token || req.query?.token || null;
     const sessionToken =
       req.body?.session_token ||
       req.body?.token ||
+      (queryToken ? String(queryToken).trim() : null) ||
       bearer;
 
     if (!sessionToken) return null;

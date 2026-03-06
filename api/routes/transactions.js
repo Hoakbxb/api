@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { getCollection, getNextSequence, mongoDocToArray } = require('../config/db');
 const { sendTransactionNotificationEmail } = require('../config/mailer');
+const { getVendorIdFromReq } = require('../middleware/vendorContext');
 
 const router = Router();
 
@@ -25,8 +26,19 @@ router.get('/transactions/list', async (req, res) => {
     const acno = (req.query.acno || '').trim();
     if (!acno) return res.status(400).json({ status: 'error', message: 'acno is required', data: [] });
 
+    const vendorId = getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: [] });
+    }
+
+    const users = await getCollection('users');
     const acn = await getCollection('acn');
-    if (!acn) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: [] });
+    if (!acn || !users) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: [] });
+
+    const account = await users.findOne({ acno, vendor_id: String(vendorId).trim() }, { projection: { acno: 1, vendor_id: 1 } });
+    if (!account) {
+      return res.status(404).json({ status: 'error', message: 'Account not found', data: [] });
+    }
 
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
@@ -35,7 +47,15 @@ router.get('/transactions/list', async (req, res) => {
     const dateFrom = (req.query.date_from || '').trim();
     const dateTo = (req.query.date_to || '').trim();
 
-    const filter = { acno };
+    const filter = {
+      acno,
+      $or: [
+        { vendor_id: String(vendorId).trim() },
+        { vendor_id: { $exists: false } },
+        { vendor_id: null },
+        { vendor_id: '' },
+      ],
+    };
     if (type === 'deposit' || type === 'credit') filter.credit = { $gt: 0 };
     else if (type === 'withdrawal' || type === 'debit') filter.debit = { $gt: 0 };
     if (status === 'active' || status === 'approved') filter.status = 'Active';
@@ -90,6 +110,10 @@ router.post('/debit', async (req, res) => {
     if (!users || !acn) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
 
     const input = req.body;
+    const vendorId = getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+    }
     const requiredFields = ['acno', 'amount', 'branch', 'cur', 'date', 'cname', 'nar'];
     const missing = requiredFields.filter(f => !input[f]);
     if (missing.length) {
@@ -102,7 +126,7 @@ router.post('/debit', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Invalid amount. Must be a positive number.', data: null });
     }
 
-    const user = await users.findOne({ acno });
+    const user = await users.findOne({ acno, vendor_id: String(vendorId).trim() });
     if (!user) return res.status(400).json({ status: 'error', message: 'Account not found', data: null });
     if (user.status !== 'active') return res.status(400).json({ status: 'error', message: 'Account is not active', data: null });
 
@@ -129,14 +153,10 @@ router.post('/debit', async (req, res) => {
       bacno: input.bacno ? input.bacno.trim() : null,
       notify_user: notifyUser,
     };
-    if (user.vendor_id != null && String(user.vendor_id).trim() !== '') doc.vendor_id = String(user.vendor_id).trim();
-    else if (input.vendor_id != null && String(input.vendor_id).trim() !== '') doc.vendor_id = String(input.vendor_id).trim();
+    doc.vendor_id = String(vendorId).trim();
     await acn.insertOne(doc);
-    await users.updateOne({ acno }, { $set: { total: newBalance, cur: input.cur.trim() } });
+    await users.updateOne({ acno, vendor_id: String(vendorId).trim() }, { $set: { total: newBalance, cur: input.cur.trim() } });
 
-    const vendorId = user.vendor_id != null && String(user.vendor_id).trim() !== ''
-      ? String(user.vendor_id).trim()
-      : (input.vendor_id != null && String(input.vendor_id).trim() !== '' ? String(input.vendor_id).trim() : null);
     let emailResult = { sent: false, reason: null };
     if (notifyUser) {
       emailResult = await sendTransactionNotificationEmail({
@@ -151,7 +171,7 @@ router.post('/debit', async (req, res) => {
         branch: input.branch.trim(),
         narration: input.nar.trim(),
         reference: `TXN-${txId}`,
-        vendorId,
+        vendorId: String(vendorId).trim(),
       });
     }
 
@@ -173,17 +193,35 @@ router.post('/debit', async (req, res) => {
 
 router.get('/debit', async (req, res) => {
   try {
+    const vendorId = getVendorIdFromReq(req);
+    if (!vendorId) return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+
     const acn = await getCollection('acn');
+    const users = await getCollection('users');
     if (!acn) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
 
     const acno = (req.query.acno || '').trim();
     if (!acno) return res.status(400).json({ status: 'error', message: 'Account number (acno) is required', data: null });
 
+    if (!users) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
+    const account = await users.findOne({ acno, vendor_id: String(vendorId).trim() }, { projection: { acno: 1 } });
+    if (!account) return res.status(404).json({ status: 'error', message: 'Account not found', data: null });
+
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
 
-    const total = await acn.countDocuments({ acno, debit: { $gt: 0 } });
-    const cursor = acn.find({ acno, debit: { $gt: 0 } }).sort({ date: -1, id: -1 }).skip(offset).limit(limit);
+    const filter = {
+      acno,
+      debit: { $gt: 0 },
+      $or: [
+        { vendor_id: String(vendorId).trim() },
+        { vendor_id: { $exists: false } },
+        { vendor_id: null },
+        { vendor_id: '' },
+      ],
+    };
+    const total = await acn.countDocuments(filter);
+    const cursor = acn.find(filter).sort({ date: -1, id: -1 }).skip(offset).limit(limit);
     const transactions = [];
     for await (const doc of cursor) transactions.push(mongoDocToArray(doc));
 
@@ -202,6 +240,10 @@ router.post('/credit', async (req, res) => {
     if (!users || !acn) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
 
     const input = req.body;
+    const vendorId = getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+    }
     const requiredFields = ['acno', 'amount', 'branch', 'cur', 'date', 'cname', 'nar'];
     const missing = requiredFields.filter(f => !input[f]);
     if (missing.length) {
@@ -214,7 +256,7 @@ router.post('/credit', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Invalid amount. Must be a positive number.', data: null });
     }
 
-    const user = await users.findOne({ acno });
+    const user = await users.findOne({ acno, vendor_id: String(vendorId).trim() });
     if (!user) return res.status(400).json({ status: 'error', message: 'Account not found', data: null });
     if (user.status !== 'active') return res.status(400).json({ status: 'error', message: 'Account is not active', data: null });
 
@@ -227,8 +269,7 @@ router.post('/credit', async (req, res) => {
       cur: input.cur.trim(), balance: currentBalance, branch: input.branch.trim(),
       status: 'Pending', bacno: input.bacno ? input.bacno.trim() : null, notify_user: notifyUser,
     };
-    if (user.vendor_id != null && String(user.vendor_id).trim() !== '') doc.vendor_id = String(user.vendor_id).trim();
-    else if (input.vendor_id != null && String(input.vendor_id).trim() !== '') doc.vendor_id = String(input.vendor_id).trim();
+    doc.vendor_id = String(vendorId).trim();
     await acn.insertOne(doc);
 
     res.status(201).json({
@@ -247,17 +288,35 @@ router.post('/credit', async (req, res) => {
 
 router.get('/credit', async (req, res) => {
   try {
+    const vendorId = getVendorIdFromReq(req);
+    if (!vendorId) return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+
     const acn = await getCollection('acn');
+    const users = await getCollection('users');
     if (!acn) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
 
     const acno = (req.query.acno || '').trim();
     if (!acno) return res.status(400).json({ status: 'error', message: 'Account number (acno) is required', data: null });
 
+    if (!users) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
+    const account = await users.findOne({ acno, vendor_id: String(vendorId).trim() }, { projection: { acno: 1 } });
+    if (!account) return res.status(404).json({ status: 'error', message: 'Account not found', data: null });
+
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
 
-    const total = await acn.countDocuments({ acno, credit: { $gt: 0 } });
-    const cursor = acn.find({ acno, credit: { $gt: 0 } }).sort({ date: -1, id: -1 }).skip(offset).limit(limit);
+    const filter = {
+      acno,
+      credit: { $gt: 0 },
+      $or: [
+        { vendor_id: String(vendorId).trim() },
+        { vendor_id: { $exists: false } },
+        { vendor_id: null },
+        { vendor_id: '' },
+      ],
+    };
+    const total = await acn.countDocuments(filter);
+    const cursor = acn.find(filter).sort({ date: -1, id: -1 }).skip(offset).limit(limit);
     const transactions = [];
     for await (const doc of cursor) transactions.push(mongoDocToArray(doc));
 
@@ -272,6 +331,10 @@ router.get('/credit', async (req, res) => {
 router.post('/transfer', async (req, res) => {
   try {
     const input = req.body;
+    const vendorId = getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+    }
     const requiredFields = ['from_acno', 'to_acno', 'amount', 'transfer_type', 'pin', 'narration'];
     const missing = requiredFields.filter(f => !input[f] || (typeof input[f] === 'string' && !input[f].trim()));
     if (missing.length) {
@@ -312,7 +375,7 @@ router.post('/transfer', async (req, res) => {
     }
     if (!pinMatched) return res.status(400).json({ status: 'error', message: 'Invalid PIN. Please try again.', data: null });
 
-    const sender = await users.findOne({ acno: fromAcno });
+    const sender = await users.findOne({ acno: fromAcno, vendor_id: String(vendorId).trim() });
     if (!sender) return res.status(400).json({ status: 'error', message: 'Sender account not found', data: null });
     if (sender.status !== 'active') return res.status(400).json({ status: 'error', message: 'Sender account is not active', data: null });
 
@@ -324,7 +387,10 @@ router.post('/transfer', async (req, res) => {
     let receiver = null;
     let finalToAcno = toAcno;
     if (transferType === 'domestic') {
-      receiver = await users.findOne({ acno: { $regex: new RegExp(`^${toAcno.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+      receiver = await users.findOne({
+        acno: { $regex: new RegExp(`^${toAcno.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+        vendor_id: String(vendorId).trim(),
+      });
       if (!receiver) return res.status(400).json({ status: 'error', message: 'Recipient account not found. Please verify the account number.', data: null });
       if (receiver.status !== 'active') return res.status(400).json({ status: 'error', message: 'Recipient account is not active.', data: null });
       if ((receiver.id || receiver._id?.toString()) === (sender.id || sender._id?.toString())) {
@@ -355,8 +421,7 @@ router.post('/transfer', async (req, res) => {
       cur, balance: senderBalance, branch: branch || sender.branch || '',
       status: 'Pending', bacno: finalToAcno,
     };
-    if (sender.vendor_id != null && String(sender.vendor_id).trim() !== '') debitDoc.vendor_id = String(sender.vendor_id).trim();
-    else if (req.body && req.body.vendor_id != null && String(req.body.vendor_id).trim() !== '') debitDoc.vendor_id = String(req.body.vendor_id).trim();
+    debitDoc.vendor_id = String(vendorId).trim();
     await acn.insertOne(debitDoc);
 
     if (transferType === 'domestic' && receiver) {
@@ -369,8 +434,7 @@ router.post('/transfer', async (req, res) => {
         cur, balance: receiverBalance, branch: branch || receiver.branch || '',
         status: 'Pending', bacno: fromAcno,
       };
-      if (receiver.vendor_id != null && String(receiver.vendor_id).trim() !== '') creditDoc.vendor_id = String(receiver.vendor_id).trim();
-      else if (req.body && req.body.vendor_id != null && String(req.body.vendor_id).trim() !== '') creditDoc.vendor_id = String(req.body.vendor_id).trim();
+      creditDoc.vendor_id = String(vendorId).trim();
       await acn.insertOne(creditDoc);
     }
 
@@ -388,9 +452,7 @@ router.post('/transfer', async (req, res) => {
       message: 'Your transfer request has been submitted and is pending admin approval.',
     };
 
-    const transferVendorId = (sender.vendor_id != null && String(sender.vendor_id).trim() !== '')
-      ? String(sender.vendor_id).trim()
-      : (input.vendor_id != null && String(input.vendor_id).trim() !== '' ? String(input.vendor_id).trim() : null);
+    const transferVendorId = String(vendorId).trim();
     // Send transaction notification emails after successful submission.
     // This confirms request receipt while status is still pending approval.
     const senderEmailResult = await sendTransactionNotificationEmail({

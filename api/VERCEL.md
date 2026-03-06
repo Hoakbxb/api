@@ -38,14 +38,3 @@ vercel dev
 
 - **Static files**: `express.static()` does not serve files on Vercel. Profile images should be served via your R2/upload flow.
 - **CORS**: If your frontend is on another domain, ensure CORS is configured in the app (already using `cors()` with default options; tighten in production if needed).
-
-### MongoDB "SSL alert internal error" on Vercel
-
-If you see `SSL routines:ssl3_read_bytes:tlsv1 alert internal error` or similar, MongoDB Atlas is usually blocking the connection because **Vercel’s IPs are not allowed**.
-
-1. Open [MongoDB Atlas](https://cloud.mongodb.com) → your project → **Network Access** (left sidebar).
-2. Click **Add IP Address**.
-3. Click **Allow Access from Anywhere** (this adds `0.0.0.0/0`). Confirm.
-4. Wait 1–2 minutes for the rule to apply, then redeploy or hit your Vercel API again.
-
-Restricting to specific IPs is not practical with Vercel because their IPs are dynamic and many. Use Atlas authentication (strong password, no shared users) and optionally Vercel’s environment variables / firewall instead.

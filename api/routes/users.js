@@ -2,6 +2,7 @@ const { Router } = require('express');
 const { getCollection, getNextSequence, mongoDocToArray } = require('../config/db');
 const { sendAccountCreatedEmail, sendPasswordChangedEmail } = require('../config/mailer');
 const { getAdminFromToken } = require('../middleware/adminAuth');
+const { getVendorIdFromReq } = require('../middleware/vendorContext');
 
 const router = Router();
 
@@ -38,9 +39,12 @@ router.get('/get_user', async (req, res) => {
 
     const filter = userId > 0 ? { id: userId } : { acno };
     const admin = await getAdminFromToken(req);
-    if (admin) {
-      filter.vendor_id = admin.vendor_id ?? admin.username;
+    const vendorId = admin ? (admin.vendor_id ?? admin.username) : getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
     }
+    filter.vendor_id = String(vendorId).trim();
+
     const user = await users.findOne(filter);
     if (!user) return res.status(404).json({ status: 'error', message: 'User not found', data: null });
 
@@ -102,9 +106,11 @@ router.get('/get_users', async (req, res) => {
 
     // When admin is logged in (Bearer token), only return users for that admin's vendor.
     const admin = await getAdminFromToken(req);
-    if (admin) {
-      filter.vendor_id = admin.vendor_id ?? admin.username;
+    const vendorId = admin ? (admin.vendor_id ?? admin.username) : getVendorIdFromReq(req);
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: [] });
     }
+    filter.vendor_id = String(vendorId).trim();
 
     const totalItems = await users.countDocuments(filter);
     const totalPages = Math.ceil(totalItems / limit);
@@ -255,6 +261,14 @@ router.all('/update_user', async (req, res) => {
     if (admin) {
       const adminVendorId = admin.vendor_id ?? admin.username;
       if (current.vendor_id != null && String(current.vendor_id) !== String(adminVendorId)) {
+        return res.status(403).json({ status: 'error', message: 'You can only update users belonging to your organization', data: null });
+      }
+    } else {
+      const vendorId = getVendorIdFromReq(req);
+      if (!vendorId) {
+        return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
+      }
+      if (current.vendor_id != null && String(current.vendor_id) !== String(vendorId).trim()) {
         return res.status(403).json({ status: 'error', message: 'You can only update users belonging to your organization', data: null });
       }
     }

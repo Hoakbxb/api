@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const { getCollection, mongoDocToArray } = require('../config/db');
+const { getVendorIdFromReq } = require('../middleware/vendorContext');
 
 const router = Router();
 
@@ -7,27 +8,35 @@ const router = Router();
 router.get('/get', async (req, res) => {
   try {
     const acno = (req.query.acno || '').trim();
-    const vendorId = (req.query.vendor_id || '').trim() || null;
+    const vendorId = getVendorIdFromReq(req);
 
     if (!acno) {
       return res.status(400).json({ status: 'error', message: 'Account number (acno) is required', data: null });
+    }
+    if (!vendorId) {
+      return res.status(401).json({ status: 'error', message: 'Unauthorized: vendor_id required', data: null });
     }
 
     const pins = await getCollection('pins');
     const users = await getCollection('users');
     if (!pins) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
 
+    // Ensure account belongs to vendor
+    if (users) {
+      const account = await users.findOne({ acno, vendor_id: String(vendorId).trim() }, { projection: { acno: 1 } });
+      if (!account) {
+        return res.status(404).json({ status: 'error', message: 'PIN record not found', data: null });
+      }
+    }
+
     let pinDoc = await pins.findOne({ acno }, { sort: { id: -1 } });
     if (!pinDoc) {
       return res.status(404).json({ status: 'error', message: 'PIN record not found', data: null });
     }
 
-    // When vendor_id is provided, only return pin if it belongs to that vendor (or is unscoped)
-    if (vendorId) {
-      const pinVendor = pinDoc.vendor_id != null && String(pinDoc.vendor_id).trim() !== '' ? String(pinDoc.vendor_id).trim() : null;
-      if (pinVendor && pinVendor !== vendorId) {
-        return res.status(404).json({ status: 'error', message: 'PIN record not found', data: null });
-      }
+    const pinVendor = pinDoc.vendor_id != null && String(pinDoc.vendor_id).trim() !== '' ? String(pinDoc.vendor_id).trim() : null;
+    if (pinVendor && pinVendor !== String(vendorId).trim()) {
+      return res.status(404).json({ status: 'error', message: 'PIN record not found', data: null });
     }
 
     const p = mongoDocToArray(pinDoc);
