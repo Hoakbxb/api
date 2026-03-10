@@ -284,6 +284,53 @@ router.post('/delete', async (req, res) => {
   }
 });
 
+// POST /change_password — set customer login password (plain text, no hash). Only users belonging to this admin's vendor.
+router.post('/change_password', async (req, res) => {
+  try {
+    const vendorId = req.adminVendorId;
+    if (!vendorId) return res.status(401).json({ status: 'error', message: 'Unauthorized', data: null });
+
+    const input = req.body || {};
+    const userIdRaw = input.id ?? input.user_id ?? null;
+    const acno = (input.acno || '').trim();
+    const newPassword = input.new_password;
+    if (newPassword === undefined || newPassword === null) {
+      return res.status(400).json({ status: 'error', message: 'new_password is required', data: null });
+    }
+    const passPlain = String(newPassword).trim();
+
+    const users = await getCollection('users');
+    if (!users) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
+
+    const vendorFilter = { vendor_id: vendorId };
+    let user = null;
+    if (acno) {
+      user = await users.findOne({ acno, ...vendorFilter });
+    } else if (userIdRaw != null) {
+      const numId = parseInt(userIdRaw, 10);
+      user = numId > 0
+        ? await users.findOne({ id: numId, ...vendorFilter })
+        : ObjectId.isValid(userIdRaw)
+          ? await users.findOne({ _id: new ObjectId(userIdRaw), ...vendorFilter })
+          : null;
+    }
+    if (!user) return res.status(404).json({ status: 'error', message: 'User not found', data: null });
+
+    await users.updateOne(
+      { _id: user._id },
+      { $set: { pass: passPlain } }
+    );
+
+    return res.json({
+      status: 'success',
+      message: 'Customer password updated successfully',
+      data: { user_id: user.id ?? user._id?.toString(), acno: user.acno },
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message, data: null });
+  }
+});
+
 // POST /claim_unscoped — claim a legacy/unscoped user (vendor_id null/empty/missing) into this admin's vendor.
 // This fixes older records created when vendor headers/body were missing.
 router.post('/claim_unscoped', async (req, res) => {

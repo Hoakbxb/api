@@ -13,11 +13,27 @@ function isSuperAdmin(req) {
   return req.admin && (req.admin.role_id === 1 || req.admin.role_id === '1');
 }
 
-// GET /admin/credit_cards/list — only this admin's vendor (req.adminVendorId from token)
+// GET /admin/credit_cards/list — scoped to a single vendor
 router.get('/list', async (req, res) => {
   try {
-    const vendorId = req.adminVendorId;
-    if (!vendorId) return res.status(401).json({ status: 'error', message: 'Unauthorized', data: [] });
+    // Determine effective vendor:
+    // - Super admin MUST explicitly pass ?vendor_id=... (no default "all vendors" listing)
+    // - Other admins are always restricted to req.adminVendorId from their token
+    const vendorIdParam = (req.query.vendor_id ?? '').toString().trim();
+    let vendorId = null;
+    if (isSuperAdmin(req)) {
+      if (!vendorIdParam) {
+        return res
+          .status(400)
+          .json({ status: 'error', message: 'vendor_id is required for this operation', data: [] });
+      }
+      vendorId = vendorIdParam;
+    } else {
+      vendorId = req.adminVendorId;
+      if (!vendorId) {
+        return res.status(401).json({ status: 'error', message: 'Unauthorized', data: [] });
+      }
+    }
 
     const creditCards = await getCollection('credit_cards');
     const users = await getCollection('users');
@@ -32,9 +48,20 @@ router.get('/list', async (req, res) => {
     const search = (req.query.search || '').trim();
     const userId = parseInt(req.query.user_id, 10) || 0;
 
+    // Base match including vendor scoping
     const match = {};
     if (status) match.status = status;
     if (userId > 0) match.user_id = userId;
+    if (vendorId) {
+      const vidNum = Number(vendorId);
+      const hasNumeric = !Number.isNaN(vidNum);
+      match.$or = [
+        { vendor_id: vendorId },
+        ...(hasNumeric ? [{ vendor_id: vidNum }] : []),
+        { 'user.vendor_id': vendorId },
+        ...(hasNumeric ? [{ 'user.vendor_id': vidNum }] : []),
+      ];
+    }
 
     const pipeline = [
       { $match: Object.keys(match).length ? match : {} },
@@ -61,17 +88,6 @@ router.get('/list', async (req, res) => {
         },
       },
     ];
-    if (!isSuperAdmin(req)) {
-      pipeline.push({
-        $match: {
-          $or: [
-            { 'user.vendor_id': vendorId },
-            { 'user.vendor_id': null },
-            { 'user.vendor_id': '' },
-          ],
-        },
-      });
-    }
 
     if (search) {
       pipeline.push({
@@ -456,20 +472,48 @@ router.get('/products', async (req, res) => {
 // GET /admin/credit_cards/stats
 router.get('/stats', async (req, res) => {
   try {
+    // Determine effective vendor for stats:
+    // - Super admin MUST pass ?vendor_id=... (no global stats over all vendors)
+    // - Other admins are always restricted to req.adminVendorId
+    const vendorIdParam = (req.query.vendor_id ?? '').toString().trim();
+    let vendorId = null;
+    if (isSuperAdmin(req)) {
+      if (!vendorIdParam) {
+        return res
+          .status(400)
+          .json({ status: 'error', message: 'vendor_id is required for this operation', data: null });
+      }
+      vendorId = vendorIdParam;
+    } else {
+      vendorId = req.adminVendorId;
+      if (!vendorId) {
+        return res.status(401).json({ status: 'error', message: 'Unauthorized', data: null });
+      }
+    }
+
     const creditCards = await getCollection('credit_cards');
     const users = await getCollection('users');
     if (!creditCards || !users) {
       return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
     }
 
-    const vendorId = req.adminVendorId;
-    const matchVendor = isSuperAdmin(req) ? {} : { 'user.vendor_id': vendorId };
+    // Always scope stats to the resolved vendorId
+    const vidNum = Number(vendorId);
+    const hasNumeric = !Number.isNaN(vidNum);
+    const matchVendor = {
+      $or: [
+        { vendor_id: vendorId },
+        ...(hasNumeric ? [{ vendor_id: vidNum }] : []),
+        { 'user.vendor_id': vendorId },
+        ...(hasNumeric ? [{ 'user.vendor_id': vidNum }] : []),
+      ],
+    };
     const basePipeline = [
       { $lookup: { from: 'users', localField: 'user_id', foreignField: 'id', as: 'user' } },
       { $addFields: { user: { $arrayElemAt: ['$user', 0] } } },
     ];
     if (Object.keys(matchVendor).length > 0) {
-      basePipeline.push({ $match: { $or: [matchVendor, { 'user.vendor_id': null }, { 'user.vendor_id': '' }] } });
+      basePipeline.push({ $match: matchVendor });
     }
 
     const countPipeline = [...basePipeline, { $count: 'total' }];

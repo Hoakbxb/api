@@ -186,6 +186,12 @@ router.post('/create_account', async (req, res) => {
     }
 
     const userId = await getNextSequence('users');
+    // Initial balance: optional; must be >= 0
+    const initialBalance = parseFloat(input.total);
+    const total = (typeof initialBalance === 'number' && !Number.isNaN(initialBalance) && initialBalance >= 0)
+      ? Math.round(initialBalance * 100) / 100
+      : 0;
+
     const doc = {
       id: userId,
       fname: (input.fname || '').trim(),
@@ -201,7 +207,7 @@ router.post('/create_account', async (req, res) => {
       date: input.date || new Date().toISOString().substring(0, 10),
       typ: (input.typ || '').trim(),
       cur: (input.cur || 'USD').trim(),
-      total: parseFloat(input.total) || 0,
+      total,
       pin: (input.pin || '').trim(),
       count: parseInt(input.count) || 0,
       status: (input.status || 'active').trim(),
