@@ -25,6 +25,13 @@ function calcAge(dob) {
   return age;
 }
 
+function isNotifyEnabled(val) {
+  if (val === false || val === 0) return false;
+  const s = String(val ?? '').toLowerCase().trim();
+  if (s === '0' || s === 'false' || s === 'off' || s === 'no') return false;
+  return true;
+}
+
 // GET /get_user — single user by id or acno. When admin token present, only return user for that admin's vendor.
 router.get('/get_user', async (req, res) => {
   try {
@@ -158,7 +165,8 @@ router.post('/create_account', async (req, res) => {
     }
 
     const users = await getCollection('users');
-    if (!users) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
+    const acn = await getCollection('acn');
+    if (!users || !acn) return res.status(500).json({ status: 'error', message: 'Database connection failed', data: null });
 
     if (await users.findOne({ email: input.email.trim() })) {
       return res.status(409).json({ status: 'error', message: 'Email already exists', data: null });
@@ -221,25 +229,57 @@ router.post('/create_account', async (req, res) => {
     };
 
     await users.insertOne(doc);
+
+    // If an initial balance was provided, record it in the ledger as an opening credit.
+    // This keeps `users.total` consistent with the transaction history (`acn`).
+    if (total > 0) {
+      const acnId = await getNextSequence('acn');
+      const opening = {
+        id: acnId,
+        acno,
+        credit: total,
+        debit: 0,
+        date: doc.date || new Date().toISOString().substring(0, 10),
+        narration: 'Opening Balance',
+        cname: doc.fname || '',
+        cur: doc.cur || 'USD',
+        balance: total,
+        branch: doc.branch || '',
+        status: 'Active',
+        bacno: null,
+        notify_user: false,
+        vendor_id: String(vendorId).trim(),
+      };
+      await acn.insertOne(opening);
+    }
+
+    // Only send the "account created" email when explicitly requested.
+    // Admin UI passes notify_user=1 when the checkbox is checked.
+    const notifyUser = isNotifyEnabled(input.notify_user);
     const emailVendorId = vendorId != null && String(vendorId).trim() !== '' ? String(vendorId).trim() : null;
-    const emailResult = await sendAccountCreatedEmail({
-      user: doc,
-      plainPassword: doc.pass,
-      vendorId: emailVendorId,
-    });
+    const emailResult = notifyUser
+      ? await sendAccountCreatedEmail({
+        user: doc,
+        plainPassword: doc.pass,
+        vendorId: emailVendorId,
+      })
+      : { sent: false, reason: 'Notification not requested' };
     const data = { ...doc };
     delete data.pass;
     delete data._id;
     data.notification = {
       email_sent: emailResult.sent === true,
       email_error: emailResult.sent ? null : (emailResult.reason || null),
+      requested: notifyUser === true,
     };
 
     res.status(201).json({
       status: 'success',
-      message: emailResult.sent
-        ? 'Account created successfully and notification email sent'
-        : 'Account created successfully (email notification could not be sent)',
+      message: notifyUser
+        ? (emailResult.sent
+          ? 'Account created successfully and notification email sent'
+          : 'Account created successfully (email notification could not be sent)')
+        : 'Account created successfully',
       data,
     });
   } catch (err) {

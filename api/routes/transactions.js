@@ -130,13 +130,7 @@ router.post('/debit', async (req, res) => {
     if (!user) return res.status(400).json({ status: 'error', message: 'Account not found', data: null });
     if (user.status !== 'active') return res.status(400).json({ status: 'error', message: 'Account is not active', data: null });
 
-    const agg = await acn.aggregate([
-      { $match: { acno } },
-      { $group: { _id: null, totalCredit: { $sum: '$credit' }, totalDebit: { $sum: '$debit' } } },
-    ]).toArray();
-    const totalCredit = agg[0]?.totalCredit || 0;
-    const totalDebit = agg[0]?.totalDebit || 0;
-    const currentBalance = totalCredit - totalDebit;
+    const currentBalance = parseFloat(user.total || 0);
     const newBalance = currentBalance - amount;
 
     if (newBalance < 0) {

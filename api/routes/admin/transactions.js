@@ -107,33 +107,14 @@ router.post('/approve', async (req, res) => {
     let notification = { email_sent: false, email_error: null };
 
     if (action === 'approve') {
-      // Always derive balances from the transaction ledger (acn) using only approved entries.
-      // This keeps users.total in sync with acn and avoids cases where a stale or incorrect
-      // users.total causes the balance to jump to 0 after approval.
       const sender = await users.findOne({ acno: fromAcno });
       if (!sender) return res.status(400).json({ status: 'error', message: 'Sender account not found', data: null });
 
-      // Compute the sender's current approved balance from acn (credits - debits, status = 'Active')
-      const senderAgg = await acn
-        .aggregate([
-          { $match: { acno: fromAcno, status: 'Active' } },
-          {
-            $group: {
-              _id: null,
-              totalCredit: { $sum: '$credit' },
-              totalDebit: { $sum: '$debit' },
-            },
-          },
-        ])
-        .toArray();
-      const senderLedgerBalance =
-        (senderAgg[0]?.totalCredit || 0) - (senderAgg[0]?.totalDebit || 0);
-
-      let previousSenderBalance = senderLedgerBalance;
+      const currentBalance = parseFloat(sender.total || 0);
+      let previousSenderBalance = currentBalance;
 
       if (tx.debit > 0) {
-        // Debit from sender (withdrawal / transfer out)
-        if (senderLedgerBalance < amount) {
+        if (currentBalance < amount) {
           return res.status(400).json({
             status: 'error',
             message: 'Insufficient balance in sender account',
@@ -141,14 +122,13 @@ router.post('/approve', async (req, res) => {
           });
         }
 
-        const newSenderBalance = senderLedgerBalance - amount;
+        const newSenderBalance = currentBalance - amount;
         await users.updateOne({ acno: fromAcno }, { $set: { total: newSenderBalance } });
         await acn.updateOne(
           { id: transactionId },
           { $set: { balance: newSenderBalance, status: newStatus } }
         );
 
-        // If this is a domestic transfer, also credit the recipient using their approved balance.
         if (toAcno) {
           const creditEntry = await acn.findOne(
             { acno: toAcno, credit: amount, status: 'Pending', bacno: fromAcno, date },
@@ -157,21 +137,8 @@ router.post('/approve', async (req, res) => {
           if (creditEntry) {
             const receiver = await users.findOne({ acno: toAcno });
             if (receiver) {
-              const receiverAgg = await acn
-                .aggregate([
-                  { $match: { acno: toAcno, status: 'Active' } },
-                  {
-                    $group: {
-                      _id: null,
-                      totalCredit: { $sum: '$credit' },
-                      totalDebit: { $sum: '$debit' },
-                    },
-                  },
-                ])
-                .toArray();
-              const receiverLedgerBalance =
-                (receiverAgg[0]?.totalCredit || 0) - (receiverAgg[0]?.totalDebit || 0);
-              const newReceiverBalance = receiverLedgerBalance + amount;
+              const receiverBalance = parseFloat(receiver.total || 0);
+              const newReceiverBalance = receiverBalance + amount;
 
               await users.updateOne(
                 { acno: toAcno },
@@ -185,8 +152,7 @@ router.post('/approve', async (req, res) => {
           }
         }
       } else {
-        // Credit to account (deposit / incoming transfer / loan disbursement, etc.)
-        const newReceiverBalance = senderLedgerBalance + amount;
+        const newReceiverBalance = currentBalance + amount;
         await users.updateOne({ acno: fromAcno }, { $set: { total: newReceiverBalance } });
         await acn.updateOne(
           { id: transactionId },
