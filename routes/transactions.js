@@ -261,12 +261,13 @@ router.post('/credit', async (req, res) => {
     if (user.status !== 'active') return res.status(400).json({ status: 'error', message: 'Account is not active', data: null });
 
     const currentBalance = parseFloat(user.total || 0);
+    const newBalance = currentBalance + amount;
     const txId = await getNextSequence('acn');
     const notifyUser = isNotifyEnabled(input.notify_user);
     const doc = {
       id: txId, acno, credit: amount, debit: 0,
       date: input.date.trim(), narration: input.nar.trim(), cname: input.cname.trim(),
-      cur: input.cur.trim(), balance: currentBalance, branch: input.branch.trim(),
+      cur: input.cur.trim(), balance: newBalance, branch: input.branch.trim(),
       status: 'Pending', bacno: input.bacno ? input.bacno.trim() : null, notify_user: notifyUser,
     };
     doc.vendor_id = String(vendorId).trim();
@@ -277,7 +278,7 @@ router.post('/credit', async (req, res) => {
       message: 'Credit application submitted successfully. Waiting for admin approval.',
       data: {
         transaction_id: txId, account_number: acno, amount, currency: input.cur.trim(),
-        current_balance: currentBalance, status: 'Pending', date: input.date.trim(), branch: input.branch.trim(),
+        current_balance: currentBalance, new_balance: newBalance, status: 'Pending', date: input.date.trim(), branch: input.branch.trim(),
         message: 'Your credit application has been submitted and is pending admin approval.',
       },
     });

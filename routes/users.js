@@ -215,6 +215,31 @@ router.post('/create_account', async (req, res) => {
     };
 
     await users.insertOne(doc);
+
+    // Record opening deposit in the ledger so funding approvals don't wipe users.total
+    if (doc.total > 0) {
+      const acn = await getCollection('acn');
+      if (acn) {
+        const acnId = await getNextSequence('acn');
+        const openingDoc = {
+          id: acnId,
+          acno,
+          credit: doc.total,
+          debit: 0,
+          date: doc.date,
+          narration: 'Opening Deposit',
+          cname: 'Initial Deposit',
+          cur: doc.cur,
+          balance: doc.total,
+          branch: doc.branch || '',
+          status: 'Active',
+          bacno: null,
+          vendor_id: doc.vendor_id,
+        };
+        await acn.insertOne(openingDoc);
+      }
+    }
+
     const emailVendorId = vendorId != null && String(vendorId).trim() !== '' ? String(vendorId).trim() : null;
     const emailResult = await sendAccountCreatedEmail({
       user: doc,

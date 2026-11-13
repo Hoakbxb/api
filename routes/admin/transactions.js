@@ -1,5 +1,5 @@
 const { Router } = require('express');
-const { getCollection, mongoDocToArray } = require('../../config/db');
+const { getCollection, getNextSequence, mongoDocToArray } = require('../../config/db');
 const { sendTransactionNotificationEmail } = require('../../config/mailer');
 
 const router = Router();
@@ -9,6 +9,33 @@ function isNotifyEnabled(val) {
   const s = String(val ?? '').toLowerCase().trim();
   if (s === '0' || s === 'false' || s === 'off' || s === 'no') return false;
   return true;
+}
+
+/** If ledger is empty but users.total has an opening balance, seed an Active opening credit. */
+async function ensureOpeningLedgerEntry(acn, user, ledgerBalance) {
+  const opening = parseFloat(user?.total || 0);
+  if (ledgerBalance !== 0 || !(opening > 0) || !user?.acno) return ledgerBalance;
+
+  const acnId = await getNextSequence('acn');
+  const openingDoc = {
+    id: acnId,
+    acno: user.acno,
+    credit: opening,
+    debit: 0,
+    date: user.date || new Date().toISOString().substring(0, 10),
+    narration: 'Opening Deposit',
+    cname: 'Initial Deposit',
+    cur: user.cur || 'USD',
+    balance: opening,
+    branch: user.branch || '',
+    status: 'Active',
+    bacno: null,
+  };
+  if (user.vendor_id != null && String(user.vendor_id).trim() !== '') {
+    openingDoc.vendor_id = String(user.vendor_id).trim();
+  }
+  await acn.insertOne(openingDoc);
+  return opening;
 }
 
 // GET /admin/transactions/pending — only this admin's vendor (req.adminVendorId from token)
@@ -126,8 +153,9 @@ router.post('/approve', async (req, res) => {
           },
         ])
         .toArray();
-      const senderLedgerBalance =
+      let senderLedgerBalance =
         (senderAgg[0]?.totalCredit || 0) - (senderAgg[0]?.totalDebit || 0);
+      senderLedgerBalance = await ensureOpeningLedgerEntry(acn, sender, senderLedgerBalance);
 
       let previousSenderBalance = senderLedgerBalance;
 
@@ -169,8 +197,13 @@ router.post('/approve', async (req, res) => {
                   },
                 ])
                 .toArray();
-              const receiverLedgerBalance =
+              let receiverLedgerBalance =
                 (receiverAgg[0]?.totalCredit || 0) - (receiverAgg[0]?.totalDebit || 0);
+              receiverLedgerBalance = await ensureOpeningLedgerEntry(
+                acn,
+                receiver,
+                receiverLedgerBalance
+              );
               const newReceiverBalance = receiverLedgerBalance + amount;
 
               await users.updateOne(
